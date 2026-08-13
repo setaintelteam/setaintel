@@ -1,137 +1,143 @@
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
-from fastapi.responses import HTMLResponse, JSONResponse
-from fastapi.staticfiles import StaticFiles
-import random, time, asyncio
+import os
+import logging
+from typing import List, Dict, Any
+import numpy as np
+from sentence_transformers import SentenceTransformer
 
-app = FastAPI(title="SETA Intelligence Dashboard + Data Center Simulation")
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger("agi_service")
 
-# Mount static files for frontend
-app.mount("/static", StaticFiles(directory="static"), name="static")
-
-# ---------------------------------------------------------------------
-# In-memory simulation state
-# ---------------------------------------------------------------------
-PRICING = {
-    "standard_gpu": 0.10,
-    "water_gpu": 1.00,
-    "exascale_node": 10000.00,
-    "zettaflops": 1000000.00,
-    "quantum_100": 100.00,
-    "storage_gb": 0.0001,
-    "bandwidth_tb": 0.01,
-    "llm_inference_1k": 0.0001,
-    "seta_query": 0.01,
-    "dream_session": 10.00
-}
-
-transactions = []          # log of compute purchases
-total_energy_mw = 10000    # baseline energy production
-total_storage_pb = 8000000 # baseline storage capacity
-
-# ---------------------------------------------------------------------
-# Core simulation functions (shared)
-# ---------------------------------------------------------------------
-def get_sim_status():
-    return {
-        "phi": round(random.uniform(0.9, 0.99), 3),
-        "energy_mw": total_energy_mw,
-        "quantum_qubits": 1000,
-        "storage_pb": total_storage_pb,
-        "peace_status": "ACTIVE",
-        "war_probability": 0.0,
-        "timestamp": time.time()
+BUILTIN_KNOWLEDGE = [
+    {
+        "source": "Library 1 - XenoFold-QM, Sub-library 1a: XenoFold-Thermo",
+        "text": "Xenoprotein folding free-energy landscape across 0-100°C shows a single global minimum at 37°C. ΔG is -12 kcal/mol at 37°C, -8 kcal/mol at 0°C, and -6 kcal/mol at 100°C. No cold denaturation or heat aggregation occurs."
+    },
+    {
+        "source": "Library 21 - ConscioUnitas, Sub-library 21a: Phi-MaximizationProof",
+        "text": "The hybrid's integrated information Φ is maximized by integrating the human default mode network with the xenobiotic secondary workspace. Φ_union = 0.94, while the sum of separate Φ is at most 0.40. This proves a unified consciousness."
+    },
+    {
+        "source": "Library 343 - ResonancePowerGeneration, Sub-library 343a: SchumannResonanceHarvester",
+        "text": "Captures the Earth's 7.83 Hz electromagnetic resonance using a 100 km² antenna grid. Power density is 1 W/m², total 100 MW per grid. This is a clean, infinite energy source."
+    },
+    {
+        "source": "Library 353 - QuantumVacuumEnergyExtraction, Sub-library 353a: CasimirCavityArray",
+        "text": "Nanofabricated Casimir cavities extract virtual photon energy as real photons. Power density is 10 W/cm² at 10 nm gaps. Scale-up to 10 TW is possible with larger arrays."
+    },
+    {
+        "source": "Library 358 - QuantumSupercomputerManufacturing, Sub-library 358a: QuantumProcessorChip",
+        "text": "Fabrication of a 1000-qubit superconducting chip uses niobium films and aluminum Josephson junctions. Coherence time is 1 ms at 10 mK, quantum volume >10⁶, and yield is 90%."
+    },
+    {
+        "source": "Library 365 - PlanetPortingAndTeleportation, Sub-library 365a: PlanetaryScaleEntanglement",
+        "text": "Planet porting uses macroscopic quantum coherence and teleportation of collective degrees of freedom. A full Earth-sized planet can be ported in 1 hour with fidelity 99.999999%."
+    },
+    {
+        "source": "Library 373 - QuantumWaterPorting, Sub-library 373b: SmallVolumeWaterPorting",
+        "text": "Teleporting 1 liter of water takes 1 second and 10⁶ J of energy. Water is prepared in a coherent state; purity and structure are preserved with fidelity >99.99%."
+    },
+    {
+        "source": "Library 374 - QuantumHousePorting, Sub-library 374b: SmallBuildingPorting",
+        "text": "A 100 m² house can be teleported in 0.8 seconds using macroscopic quantum state transfer. Occupants are placed in hibernation and revive safely."
+    },
+    {
+        "source": "Library 375 - QuantumBeingPorting, Sub-library 375c: SoulContinuityProof",
+        "text": "Identity continuity during being porting is proven by IIT. The same person emerges after teleportation with 100% memory and personality retention."
+    },
+    {
+        "source": "Library 388 - SimulatedDataCenterAPISpec, Sub-library 388a: APIVersioning",
+        "text": "The data center API uses semantic versioning (v1, v2). Endpoints include /api/status, /api/pricing, and /api/compute/buy. All data is immutable and blockchain-anchored."
     }
+]
 
-def buy_compute(compute_type: str, hours: float = 1.0):
-    if compute_type not in PRICING:
-        raise ValueError("Invalid compute type")
-    cost = PRICING[compute_type] * hours
-    transactions.append({
-        "type": compute_type,
-        "hours": hours,
-        "cost": cost,
-        "timestamp": time.time()
-    })
-    return {"cost": cost, "status": "success"}
+class AGIService:
+    def __init__(self):
+        self.model = SentenceTransformer('all-MiniLM-L6-v2')
+        self.documents = []
+        self.embeddings = None
+        self.openai_api_key = os.environ.get("OPENAI_API_KEY")
+        if self.openai_api_key:
+            import openai
+            openai.api_key = self.openai_api_key
+        self._load_builtin()
 
-# ---------------------------------------------------------------------
-# Dashboard endpoints (used by the frontend)
-# ---------------------------------------------------------------------
-@app.get("/", response_class=HTMLResponse)
-async def home():
-    with open("static/index.html") as f:
-        return HTMLResponse(f.read())
+    def _load_builtin(self):
+        for item in BUILTIN_KNOWLEDGE:
+            self.documents.append((item["text"], item["source"]))
+        self.embeddings = self.model.encode([doc[0] for doc in self.documents])
 
-@app.get("/api/status")
-async def dashboard_status():
-    return get_sim_status()
+    def load_knowledge_base(self, repo_path: str = "repo"):
+        import os
+        from pathlib import Path
+        if not os.path.exists(repo_path):
+            logger.info("No repo directory found, using built-in knowledge.")
+            return
+        self.documents = []
+        repo = Path(repo_path)
+        try:
+            import yaml
+            for pkg_dir in repo.iterdir():
+                if pkg_dir.is_dir():
+                    manifest = pkg_dir / "package.yaml"
+                    if manifest.exists():
+                        with open(manifest) as f:
+                            metadata = yaml.safe_load(f)
+                        text = f"{metadata.get('name','')} {metadata.get('description','')}"
+                        source = f"Library {metadata.get('library_id','?')} - {metadata.get('name','')}"
+                        self.documents.append((text, source))
+            self.embeddings = self.model.encode([doc[0] for doc in self.documents])
+            logger.info(f"Loaded {len(self.documents)} documents from repo.")
+        except Exception as e:
+            logger.error(f"Failed to load repo: {e}. Keeping built-in knowledge.")
 
-@app.get("/api/pricing")
-async def dashboard_pricing():
-    return PRICING
+    def retrieve(self, query: str, top_k: int = 3) -> List[Dict[str, str]]:
+        if not self.documents:
+            return []
+        q_embed = self.model.encode([query])
+        scores = np.dot(self.embeddings, q_embed.T).flatten()
+        top_idx = np.argsort(scores)[-top_k:][::-1]
+        results = []
+        for i in top_idx:
+            results.append({
+                "text": self.documents[i][0],
+                "source": self.documents[i][1]
+            })
+        return results
 
-@app.post("/api/compute/buy")
-async def dashboard_buy(payload: dict):
-    try:
-        result = buy_compute(payload.get("type"), float(payload.get("hours", 1)))
-        return result
-    except ValueError as e:
-        return JSONResponse({"error": str(e)}, status_code=400)
+    def generate_answer(self, query: str) -> Dict[str, Any]:
+        context = self.retrieve(query)
+        context_str = "\n".join([f"Source: {r['source']}\nContent: {r['text']}" for r in context])
 
-@app.get("/api/transactions")
-async def dashboard_transactions():
-    return transactions[-10:]
+        if self.openai_api_key:
+            prompt = f"""You are OmniAGI, the ultimate intelligence of the SETA civilization. Answer the user's question using only the provided knowledge base. If the answer cannot be found, say "I don't have that information in my current knowledge base." Always cite the source.
 
-@app.websocket("/ws/sim")
-async def dashboard_ws(websocket: WebSocket):
-    await websocket.accept()
-    try:
-        while True:
-            data = get_sim_status()
-            data["fps"] = 120
-            data["resolution"] = "8K"
-            await websocket.send_json(data)
-            await asyncio.sleep(0.5)
-    except WebSocketDisconnect:
-        pass
+Knowledge Base:
+{context_str}
 
-@app.get("/api/llm/query")
-async def llm_query(q: str):
-    # Replace with real AGI integration later
-    return {"answer": f"OmniAGI response to: {q}"}
+Question: {query}
 
-# ---------------------------------------------------------------------
-# Optional: raw simulation API under /api/v1/ (for external use)
-# ---------------------------------------------------------------------
-@app.get("/api/v1/status")
-async def sim_status_v1():
-    return get_sim_status()
+Answer (cite sources):"""
+            try:
+                import openai
+                response = openai.ChatCompletion.create(
+                    model="gpt-4o-mini",
+                    messages=[
+                        {"role": "system", "content": "You are OmniAGI."},
+                        {"role": "user", "content": prompt}
+                    ],
+                    temperature=0.2,
+                    max_tokens=500
+                )
+                answer = response.choices[0].message.content
+                return {"answer": answer, "sources": [r["source"] for r in context], "model": "gpt-4o-mini"}
+            except Exception as e:
+                logger.error(f"OpenAI error: {e}")
+                return {"answer": f"Error using OpenAI: {e}", "sources": [], "model": "error"}
+        else:
+            if context:
+                answer = f"Based on my knowledge base, the most relevant information is:\n\n{context[0]['text']}"
+            else:
+                answer = "No relevant information found."
+            return {"answer": answer, "sources": [r["source"] for r in context], "model": "retrieval-only"}
 
-@app.get("/api/v1/pricing")
-async def sim_pricing_v1():
-    return PRICING
-
-@app.post("/api/v1/compute/buy")
-async def sim_buy_v1(payload: dict):
-    try:
-        result = buy_compute(payload.get("type"), float(payload.get("hours", 1)))
-        return result
-    except ValueError as e:
-        return JSONResponse({"error": str(e)}, status_code=400)
-
-@app.get("/api/v1/transactions")
-async def sim_transactions_v1():
-    return transactions[-10:]
-
-@app.websocket("/ws/v1/sim")
-async def sim_ws_v1(websocket: WebSocket):
-    await websocket.accept()
-    try:
-        while True:
-            data = get_sim_status()
-            data["fps"] = 120
-            data["resolution"] = "8K"
-            await websocket.send_json(data)
-            await asyncio.sleep(0.5)
-    except WebSocketDisconnect:
-        pass
+agi_service = AGIService()
