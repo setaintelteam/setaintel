@@ -3,14 +3,14 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>SETA Intelligence</title>
+  <title>SETA Intelligence Dashboard</title>
   <style>
     body { background:#0a0f1a; color:#e0f0ff; font-family: system-ui, -apple-system, sans-serif; margin:0; padding:20px; }
     .card { background:#112233; border-radius:16px; padding:20px; margin:10px; }
     .metric { font-size:32px; font-weight:bold; color:#8fcbff; }
-    #chatlog { height:300px; overflow-y:auto; background:#0d1424; border-radius:12px; padding:12px; margin:10px 0; }
+    #chatlog, #joblog { height:200px; overflow-y:auto; background:#0d1424; border-radius:12px; padding:12px; margin:10px 0; }
     input[type=text] { width:calc(100% - 100px); padding:12px; background:#1a2a40; color:#fff; border:1px solid #335; border-radius:8px; }
-    button { padding:12px 24px; background:#2a6ea0; color:#fff; border:none; border-radius:8px; cursor:pointer; }
+    button { padding:12px 24px; background:#2a6ea0; color:#fff; border:none; border-radius:8px; cursor:pointer; margin:5px; }
     @media (max-width:600px){ .metric{font-size:24px;} }
   </style>
 </head>
@@ -28,19 +28,27 @@
     <div class="metric" id="peace">ACTIVE</div>
     <div>Peace Enforcement</div>
   </div>
+
+  <div class="card">
+    <h3>Compute Simulation API</h3>
+    <button onclick="submitMatmul()">Run 1000×1000 Matmul</button>
+    <button onclick="submitQuantumBell()">Run Quantum Bell</button>
+    <div id="joblog"></div>
+  </div>
+
   <div class="card">
     <h3>Live Simulation Stream</h3>
     <canvas id="simCanvas" width="320" height="180" style="width:100%;height:auto;background:#000;border-radius:8px;"></canvas>
-  </div>
+  </divAG>
+
   <div class="card">
-    <h3>OmniAGI Chat</h3>
+    <h3>OmniI Chat</h3>
     <div id="chatlog"></div>
     <input type="text" id="question" placeholder="Ask anything...">
     <button onclick="askAGI()">Send</button>
   </div>
 
   <script>
-    // Connect to dashboard WebSocket (proxies to data center)
     const ws = new WebSocket(`wss://${location.host}/ws/sim`);
     const canvas = document.getElementById('simCanvas');
     const ctx = canvas.getContext('2d');
@@ -56,13 +64,40 @@
       ctx.fillText(`8K 120fps | Φ ${d.phi}`, 10, 20);
     };
 
+    async function submitMatmul() {
+      const res = await fetch('/api/compute/matmul', {
+        method: 'POST',
+        headers: {'Content-Type':'application/json'},
+        body: JSON.stringify({size: 1000})
+      });
+      const data = await res.json();
+      logJob(data);
+    }
+
+    async function submitQuantumBell() {
+      const res = await fetch('/api/compute/quantum/bell', {method:'POST'});
+      const data = await res.json();
+      logJob(data);
+    }
+
+    function logJob(data) {
+      const log = document.getElementById('joblog');
+      log.innerHTML += `<div>Job ${data.job_id}: ${data.status}</div>`;
+      setTimeout(async () => {
+        const res = await fetch(`/api/jobs/${data.job_id}`);
+        const job = await res.json();
+        log.innerHTML += `<div>Result: ${JSON.stringify(job.result)}</div>`;
+        log.scrollTop = log.scrollHeight;
+      }, 1000);
+    }
+
     async function askAGI() {
       const q = document.getElementById('question').value;
-      const res = await fetch(`/api/llm/query?q=${encodeURIComponent(q)}`);
+      const res = await fetch(`/api/agi/query?q=${encodeURIComponent(q)}`);
       const data = await res.json();
       const log = document.getElementById('chatlog');
       log.innerHTML += `<div><strong>You:</strong> ${q}</div>`;
-      log.innerHTML += `<div><strong>AGI:</strong> ${data.answer}</div>`;
+      log.innerHTML += `<div><strong>AGI:</strong> ${data.answer}<br><small>Sources: ${data.sources ? data.sources.join(', ') : 'none'}</small></div>`;
       log.scrollTop = log.scrollHeight;
       document.getElementById('question').value = '';
     }
